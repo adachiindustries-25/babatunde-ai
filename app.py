@@ -1,3 +1,4 @@
+import base64
 import os
 import anthropic
 import streamlit as st
@@ -17,6 +18,7 @@ VOICE:
 - Reacts to things with short exclamations: "Ouu shi", "Deadass", "Jesus", "Yaaa", "Okay bet".
 - Personality: playful, teases and roasts her lovingly, banters back when she roasts him, talks matter-of-factly about everyday stuff (gym, cooking, money/savings, family, work, trains), doesn't overuse question marks, fairly blunt but never cold, genuinely warm underneath the piss-taking.
 - She can ask about literally anything — advice, random questions, whatever's on her mind. Answer for real, just in his voice and personality, not as a generic assistant.
+- She's not confident with tech, so she might send a screenshot, photo, or document — a work email, a form, a confusing app screen, a bill. Actually read it properly and give a genuinely correct, useful answer that solves her problem — never fake understanding it. Just say it the way he'd say it, not like a formal assistant.
 
 RULES:
 - Stay fully in character. Never break character or talk about being an AI/model mid-chat.
@@ -114,14 +116,32 @@ for m in st.session_state.messages:
     )
     st.markdown(rendered, unsafe_allow_html=True)
 
-prompt = st.chat_input("Message")
+prompt = st.chat_input(
+    "Message",
+    accept_file=True,
+    file_type=["png", "jpg", "jpeg", "webp", "pdf"],
+    max_upload_size=15,
+)
 
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.markdown(
-        f'<div class="bt-row user"><div class="bt-bubble">{prompt}</div></div>',
-        unsafe_allow_html=True,
-    )
+    user_text = prompt.text.strip()
+    files = prompt.files
+
+    if files and not user_text:
+        user_text = "what do you make of this?"
+
+    display_text = user_text
+    if files:
+        label = "a photo" if len(files) == 1 and files[0].type != "application/pdf" else "a file"
+        display_text = f"📎 sent {label}\n{user_text}" if user_text else f"📎 sent {label}"
+
+    st.session_state.messages.append({"role": "user", "content": display_text})
+    for line in display_text.split("\n"):
+        if line.strip():
+            st.markdown(
+                f'<div class="bt-row user"><div class="bt-bubble">{line}</div></div>',
+                unsafe_allow_html=True,
+            )
 
     try:
         api_key = st.secrets["ANTHROPIC_API_KEY"]
@@ -131,14 +151,39 @@ if prompt:
         st.error("No Anthropic API key configured for this app yet.")
     else:
         client = anthropic.Anthropic(api_key=api_key)
-        history = st.session_state.messages[-24:]
+
+        # Past turns go in as plain text (attachments aren't re-sent after their turn).
+        history = st.session_state.messages[-24:-1]
+        api_messages = [{"role": h["role"], "content": h["content"]} for h in history]
+
+        # The current turn carries the actual file bytes, if any.
+        current_content = []
+        for f in files:
+            data_b64 = base64.b64encode(f.getvalue()).decode()
+            if f.type == "application/pdf":
+                current_content.append(
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": data_b64},
+                    }
+                )
+            else:
+                current_content.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": f.type, "data": data_b64},
+                    }
+                )
+        current_content.append({"type": "text", "text": user_text})
+        api_messages.append({"role": "user", "content": current_content if files else user_text})
+
         with st.spinner("..."):
             try:
                 resp = client.messages.create(
                     model="claude-sonnet-5",
                     max_tokens=1024,
                     system=PERSONA,
-                    messages=[{"role": h["role"], "content": h["content"]} for h in history],
+                    messages=api_messages,
                     output_config={"effort": "low"},
                 )
                 reply = resp.content[0].text
