@@ -123,7 +123,10 @@ if prompt:
         unsafe_allow_html=True,
     )
 
-    api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+    try:
+        api_key = st.secrets["ANTHROPIC_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         st.error("No Anthropic API key configured for this app yet.")
     else:
